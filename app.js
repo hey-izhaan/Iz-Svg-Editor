@@ -96,15 +96,125 @@ const INTERACTIVE_TAGS = new Set([
 function attachInteractivity() {
   svgRoot.querySelectorAll('*').forEach(el => {
     if (!INTERACTIVE_TAGS.has(el.tagName.toLowerCase())) return;
+    el.addEventListener('mousedown', onElMouseDown);
     el.addEventListener('click', onElClick);
     el.addEventListener('mouseenter', () => el.classList.add('svg-hover'));
     el.addEventListener('mouseleave', () => el.classList.remove('svg-hover'));
   });
 }
 
+// ── Drag to move ────────────────────────────────────────────────
+let isDragging    = false;
+let dragMoved     = false;   // true once mouse moves > threshold
+let dragStartX    = 0;
+let dragStartY    = 0;
+// per-element starting translate, keyed by element
+let dragOrigins   = new Map();
+
+// Parse the translate(x,y) out of an element's transform attribute.
+// Returns {x, y, rest} where rest is the transform string with translate removed.
+function parseTranslate(el) {
+  const raw = el.getAttribute('transform') || '';
+  const m = raw.match(/translate\(\s*([+-]?[\d.]+)(?:[,\s]+([+-]?[\d.]+))?\s*\)/);
+  const x = m ? parseFloat(m[1]) : 0;
+  const y = m ? parseFloat(m[2] ?? 0) : 0;
+  const rest = raw.replace(/translate\([^)]*\)/, '').trim();
+  return { x, y, rest };
+}
+
+function setTranslate(el, x, y, rest) {
+  const t = `translate(${x},${y})${rest ? ' ' + rest : ''}`;
+  el.setAttribute('transform', t);
+}
+
+function onElMouseDown(e) {
+  if (e.button !== 0) return;
+  if (window.panMode) return;
+  if (e.target.classList.contains('svg-locked')) return;
+
+  e.stopPropagation();  // prevent marquee from starting
+
+  const el = e.currentTarget;
+
+  // If Ctrl+click, let onElClick handle deep select — don't drag
+  if (e.ctrlKey || e.metaKey) return;
+
+  // If this element isn't selected, select it now (shift = add, plain = replace)
+  if (!selected.has(el)) {
+    if (!e.shiftKey) {
+      clearVisualSel();
+      selected.clear();
+    }
+    selected.add(el);
+    el.classList.add('svg-selected');
+    updateChips();
+    updateAttrPanel();
+    if (typeof highlightTreeSelection === 'function') highlightTreeSelection();
+  }
+
+  // Record drag start
+  isDragging  = true;
+  dragMoved   = false;
+  dragStartX  = e.clientX;
+  dragStartY  = e.clientY;
+  dragOrigins.clear();
+  selected.forEach(sel => {
+    const { x, y, rest } = parseTranslate(sel);
+    dragOrigins.set(sel, { x, y, rest });
+  });
+}
+
+document.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  if (window.isPanning) { isDragging = false; return; }
+
+  const dx = (e.clientX - dragStartX) / zoomScale;
+  const dy = (e.clientY - dragStartY) / zoomScale;
+
+  if (!dragMoved && Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
+  dragMoved = true;
+
+  selected.forEach(el => {
+    if (el.classList.contains('svg-locked')) return;
+    const o = dragOrigins.get(el);
+    if (!o) return;
+    setTranslate(el, o.x + dx, o.y + dy, o.rest);
+  });
+});
+
+document.addEventListener('mouseup', () => {
+  if (!isDragging) return;
+  isDragging = false;
+  if (dragMoved) {
+    refreshOutput();
+    if (typeof snapshot === 'function') snapshot();
+    if (typeof buildTree === 'function') buildTree();
+  }
+  dragOrigins.clear();
+});
+
 function onElClick(e) {
   e.stopPropagation();
-  const el = e.currentTarget;
+
+  // Ctrl+click = deep select: find the deepest (leaf) element at cursor
+  let el = e.currentTarget;
+  if (e.ctrlKey || e.metaKey) {
+    const deepest = document.elementFromPoint(e.clientX, e.clientY);
+    if (deepest && deepest !== svgRoot && svgRoot.contains(deepest) &&
+        INTERACTIVE_TAGS.has(deepest.tagName.toLowerCase())) {
+      el = deepest;
+    }
+    if (selected.has(el)) {
+      selected.delete(el);
+      el.classList.remove('svg-selected');
+    } else {
+      selected.add(el);
+      el.classList.add('svg-selected');
+    }
+    updateChips();
+    updateAttrPanel();
+    return;
+  }
 
   if (e.shiftKey) {
     if (selected.has(el)) {
@@ -184,11 +294,41 @@ function updateChips() {
 }
 
 // ── Attr panel ─────────────────────────────────────────────────
+const colorFill       = document.getElementById('color-fill');
+const colorStroke     = document.getElementById('color-stroke');
+const colorFillNone   = document.getElementById('color-fill-none');
+const colorStrokeNone = document.getElementById('color-stroke-none');
+const attrOpacity      = document.getElementById('attr-opacity');
+const attrOpacityRange = document.getElementById('attr-opacity-range');
+
+function cssColorToHex(val) {
+  if (!val || val === 'none' || val === 'transparent') return null;
+  if (/^#[0-9a-f]{6}$/i.test(val)) return val;
+  if (/^#[0-9a-f]{3}$/i.test(val)) {
+    return '#' + val[1]+val[1]+val[2]+val[2]+val[3]+val[3];
+  }
+  const m = val.match(/^rgb\(\s*(\d+),\s*(\d+),\s*(\d+)\)/i);
+  if (m) return '#' + [m[1],m[2],m[3]].map(n => parseInt(n).toString(16).padStart(2,'0')).join('');
+  return null;
+}
+
+function getAttrOrStyle(el, prop) {
+  const attr = el.getAttribute(prop);
+  if (attr) return attr;
+  return getComputedStyle(el)[prop] || null;
+}
+
 function updateAttrPanel() {
   if (selected.size === 0) {
     attrTargetLabel.textContent = 'Select an element first';
     attrId.value = '';
     attrClass.value = '';
+    colorFill.value = '#000000';
+    colorStroke.value = '#000000';
+    colorFillNone.classList.remove('active');
+    colorStrokeNone.classList.remove('active');
+    attrOpacity.value = 1;
+    attrOpacityRange.value = 1;
     return;
   }
   if (selected.size === 1) {
@@ -196,12 +336,69 @@ function updateAttrPanel() {
     attrTargetLabel.textContent = `Editing: ${elLabel(el)}`;
     attrId.value    = el.id || '';
     attrClass.value = el.getAttribute('class') || '';
+
+    const fillVal   = getAttrOrStyle(el, 'fill');
+    const strokeVal = getAttrOrStyle(el, 'stroke');
+    colorFill.value   = cssColorToHex(fillVal)   || '#000000';
+    colorStroke.value = cssColorToHex(strokeVal) || '#000000';
+    colorFillNone.classList.toggle('active',   fillVal   === 'none');
+    colorStrokeNone.classList.toggle('active', strokeVal === 'none');
+
+    const op = parseFloat(el.getAttribute('opacity') ?? getComputedStyle(el).opacity ?? 1);
+    const opVal = isNaN(op) ? 1 : Math.min(1, Math.max(0, op));
+    attrOpacity.value = opVal;
+    attrOpacityRange.value = opVal;
   } else {
     attrTargetLabel.textContent = `${selected.size} elements selected`;
     attrId.value = '';
     attrClass.value = '';
+    colorFill.value = '#000000';
+    colorStroke.value = '#000000';
+    colorFillNone.classList.remove('active');
+    colorStrokeNone.classList.remove('active');
+    attrOpacity.value = 1;
+    attrOpacityRange.value = 1;
   }
 }
+
+// ── Apply opacity ────────────────────────────────────────────────
+function applyOpacity(val) {
+  const v = Math.min(1, Math.max(0, parseFloat(val)));
+  if (isNaN(v)) return;
+  attrOpacity.value = v;
+  attrOpacityRange.value = v;
+  selected.forEach(el => el.setAttribute('opacity', v));
+  refreshOutput();
+  if (typeof snapshot === 'function') snapshot();
+}
+
+attrOpacityRange.addEventListener('input', () => applyOpacity(attrOpacityRange.value));
+attrOpacity.addEventListener('change', () => applyOpacity(attrOpacity.value));
+
+// ── Apply color ─────────────────────────────────────────────────
+function applyColorProp(prop, value) {
+  if (selected.size === 0) return showToast('Select elements first.');
+  selected.forEach(el => el.setAttribute(prop, value));
+  refreshOutput();
+  if (typeof snapshot === 'function') snapshot();
+}
+
+colorFill.addEventListener('input', () => {
+  colorFillNone.classList.remove('active');
+  applyColorProp('fill', colorFill.value);
+});
+colorStroke.addEventListener('input', () => {
+  colorStrokeNone.classList.remove('active');
+  applyColorProp('stroke', colorStroke.value);
+});
+colorFillNone.addEventListener('click', () => {
+  colorFillNone.classList.toggle('active');
+  applyColorProp('fill', colorFillNone.classList.contains('active') ? 'none' : colorFill.value);
+});
+colorStrokeNone.addEventListener('click', () => {
+  colorStrokeNone.classList.toggle('active');
+  applyColorProp('stroke', colorStrokeNone.classList.contains('active') ? 'none' : colorStroke.value);
+});
 
 // ── Clear selection ─────────────────────────────────────────────
 btnClearSel.addEventListener('click', () => {
@@ -318,6 +515,11 @@ function formatXML(xml) {
 function refreshOutput() {
   const raw = serializeSVG();
   outputCode.value = raw ? formatXML(raw) : '';
+  // sync modal if open
+  const ma = document.getElementById('modal-code-area');
+  if (ma && document.getElementById('code-modal')?.classList.contains('open')) {
+    ma.value = outputCode.value;
+  }
 }
 
 // ── Copy / Export ───────────────────────────────────────────────
@@ -376,13 +578,14 @@ svgInput.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') renderSVG(svgInput.value);
 });
 
-// ── Ctrl+G to group ─────────────────────────────────────────────
+// ── Keyboard shortcuts ───────────────────────────────────────────
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
   if ((e.ctrlKey || e.metaKey) && e.key === 'g') {
     e.preventDefault();
     btnGroup.click();
   }
+  if (e.key === 'f' || e.key === 'F') fitToCanvas();
 });
 
 // ── Infinite canvas state ───────────────────────────────────────
@@ -417,10 +620,10 @@ function drawRulers() {
   const niceMult = rawStep / mag < 2 ? 1 : rawStep / mag < 5 ? 2 : 5;
   const step = niceMult * mag;
 
-  const BG    = '#1E293B';
-  const TICK  = '#475569';
-  const LABEL = '#64748B';
-  const BORDER = '#334155';
+  const BG    = '#18181B';
+  const TICK  = '#3F3F46';
+  const LABEL = '#52525B';
+  const BORDER = '#27272A';
   const FONT  = '9px JetBrains Mono, monospace';
 
   // ── Horizontal ruler ──────────────────────────────────────
@@ -555,12 +758,15 @@ let isMarquee = false;
 let mqStartX  = 0;
 let mqStartY  = 0;
 
+let marqueeCtrl = false;  // was Ctrl held at marquee start?
+
 canvasWrapEl.addEventListener('mousedown', e => {
   if (e.button !== 0) return;
   if (window.panMode) return;
   const svgEl = e.target.closest('#svg-viewport svg *');
   if (svgEl) return;   // clicking an SVG element — handled by onElClick
   if (!svgRoot) return;
+  marqueeCtrl = e.ctrlKey || e.metaKey;
 
   isMarquee = true;
   const wr = canvasWrapEl.getBoundingClientRect();
@@ -615,6 +821,8 @@ document.addEventListener('mouseup', e => {
     svgRoot.querySelectorAll('*').forEach(el => {
       if (!INTERACTIVE_TAGS.has(el.tagName.toLowerCase())) return;
       if (el.classList.contains('svg-locked')) return;
+      // Ctrl+drag = deep select: skip <g> containers, only leaf elements
+      if (marqueeCtrl && el.tagName.toLowerCase() === 'g') return;
       const er = el.getBoundingClientRect();
       const overlaps = !(er.right < mxL || er.left > mxR ||
                          er.bottom < myT || er.top  > myB);
@@ -628,4 +836,62 @@ document.addEventListener('mouseup', e => {
   updateChips();
   updateAttrPanel();
   if (typeof highlightTreeSelection === 'function') highlightTreeSelection();
+});
+
+// ── Code Editor Modal ────────────────────────────────────────────
+const codeModal      = document.getElementById('code-modal');
+const codeModalClose = document.getElementById('code-modal-close');
+const btnOpenCode    = document.getElementById('btn-open-code');
+const modalCodeArea  = document.getElementById('modal-code-area');
+const btnModalApply  = document.getElementById('btn-modal-apply');
+const btnModalCopy   = document.getElementById('btn-modal-copy');
+
+function openCodeModal() {
+  modalCodeArea.value = outputCode.value;
+  codeModal.classList.add('open');
+  modalCodeArea.focus();
+}
+
+function closeCodeModal() {
+  codeModal.classList.remove('open');
+}
+
+btnOpenCode.addEventListener('click', openCodeModal);
+codeModalClose.addEventListener('click', closeCodeModal);
+codeModal.addEventListener('click', e => { if (e.target === codeModal) closeCodeModal(); });
+
+btnModalApply.addEventListener('click', () => {
+  const code = modalCodeArea.value.trim();
+  if (!code) return showToast('No SVG code to apply.');
+  renderSVG(code);
+  closeCodeModal();
+});
+
+btnModalCopy.addEventListener('click', () => {
+  const raw = serializeSVG();
+  if (!raw) return showToast('No SVG loaded.');
+  navigator.clipboard.writeText(raw).then(() => showToast('Copied to clipboard!'));
+});
+
+modalCodeArea.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    btnModalApply.click();
+  }
+});
+
+// ── Keyboard Shortcuts Modal ─────────────────────────────────────
+const shortcutsModal      = document.getElementById('shortcuts-modal');
+const shortcutsModalClose = document.getElementById('shortcuts-modal-close');
+const btnOpenShortcuts    = document.getElementById('btn-open-shortcuts');
+
+btnOpenShortcuts.addEventListener('click', () => shortcutsModal.classList.add('open'));
+shortcutsModalClose.addEventListener('click', () => shortcutsModal.classList.remove('open'));
+shortcutsModal.addEventListener('click', e => { if (e.target === shortcutsModal) shortcutsModal.classList.remove('open'); });
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    closeCodeModal();
+    shortcutsModal.classList.remove('open');
+  }
 });
