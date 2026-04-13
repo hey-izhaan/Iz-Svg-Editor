@@ -131,6 +131,7 @@ function onElMouseDown(e) {
   if (e.button !== 0) return;
   if (window.panMode) return;
   if (e.target.classList.contains('svg-locked')) return;
+  if (isHidden(e.target)) return;
 
   e.stopPropagation();  // prevent marquee from starting
 
@@ -204,6 +205,7 @@ function onElClick(e) {
         INTERACTIVE_TAGS.has(deepest.tagName.toLowerCase())) {
       el = deepest;
     }
+    if (isHidden(el)) return;
     if (selected.has(el)) {
       selected.delete(el);
       el.classList.remove('svg-selected');
@@ -238,6 +240,16 @@ function onElClick(e) {
 function clearVisualSel() {
   svgViewport.querySelectorAll('.svg-selected')
     .forEach(el => el.classList.remove('svg-selected'));
+}
+
+// Returns true if el or any ancestor up to svgRoot carries svg-hidden
+function isHidden(el) {
+  let cur = el;
+  while (cur && cur !== svgRoot) {
+    if (cur.classList && cur.classList.contains('svg-hidden')) return true;
+    cur = cur.parentElement;
+  }
+  return false;
 }
 
 // ── Click on empty canvas clears selection ──────────────────────
@@ -821,6 +833,7 @@ document.addEventListener('mouseup', e => {
     svgRoot.querySelectorAll('*').forEach(el => {
       if (!INTERACTIVE_TAGS.has(el.tagName.toLowerCase())) return;
       if (el.classList.contains('svg-locked')) return;
+      if (isHidden(el)) return;
       // Ctrl+drag = deep select: skip <g> containers, only leaf elements
       if (marqueeCtrl && el.tagName.toLowerCase() === 'g') return;
       const er = el.getBoundingClientRect();

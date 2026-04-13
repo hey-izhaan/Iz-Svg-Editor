@@ -23,8 +23,30 @@ let lastClickedEl  = null; // for shift-click range anchor
 const hiddenEls = new WeakSet();
 const lockedEls = new WeakSet();
 
+// Returns a stable string key for an element (used to preserve collapse state)
+function elKey(el) {
+  if (el.id) return '#' + el.id;
+  const parts = [];
+  let cur = el;
+  while (cur && cur !== svgRoot) {
+    const p = cur.parentElement;
+    if (!p) break;
+    const idx = Array.from(p.children).indexOf(cur);
+    parts.unshift(cur.tagName + '[' + idx + ']');
+    cur = p;
+  }
+  return parts.join('>');
+}
+
 // Called from app.js after svgRoot is set
 function buildTree() {
+  // Snapshot which groups are currently collapsed before destroying the DOM
+  const collapsedKeys = new Set();
+  treeRoot.querySelectorAll('.tree-children.collapsed').forEach(childWrap => {
+    const row = childWrap.previousElementSibling;
+    if (row && row._el) collapsedKeys.add(elKey(row._el));
+  });
+
   treeOrderedEls = [];
   treeRoot.innerHTML = '';
   if (!svgRoot) {
@@ -32,6 +54,21 @@ function buildTree() {
     return;
   }
   renderTreeNode(svgRoot, treeRoot, 0);
+
+  // Restore collapsed state
+  if (collapsedKeys.size > 0) {
+    treeRoot.querySelectorAll('.tree-toggle').forEach(toggle => {
+      const row = toggle.closest('.tree-node');
+      if (!row || !row._el) return;
+      if (collapsedKeys.has(elKey(row._el))) {
+        toggle.classList.remove('open');
+        const childWrap = row.nextElementSibling;
+        if (childWrap && childWrap.classList.contains('tree-children')) {
+          childWrap.classList.add('collapsed');
+        }
+      }
+    });
+  }
 }
 
 function renderTreeNode(el, container, depth) {
@@ -47,6 +84,7 @@ function renderTreeNode(el, container, depth) {
   const row = document.createElement('div');
   row.className = 'tree-node';
   row.dataset.nodeId = el._treeId = el._treeId || Math.random().toString(36).slice(2);
+  row._el = el;
 
   // Restore hidden/locked visual state on rebuild
   if (hiddenEls.has(el)) row.classList.add('el-hidden');
