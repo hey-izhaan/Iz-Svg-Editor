@@ -82,9 +82,11 @@ function renderSVG(text) {
   canvasEmpty.classList.add('hidden');
   svgViewport.classList.add('visible');
 
+  stripClipping();
   updateChips();
   updateAttrPanel();
   refreshOutput();
+  if (typeof buildPalette === 'function') buildPalette();
 }
 
 // ── Interactivity ──────────────────────────────────────────────
@@ -187,6 +189,7 @@ document.addEventListener('mouseup', () => {
   if (!isDragging) return;
   isDragging = false;
   if (dragMoved) {
+    expandViewBox();
     refreshOutput();
     if (typeof snapshot === 'function') snapshot();
     if (typeof buildTree === 'function') buildTree();
@@ -393,6 +396,7 @@ function applyColorProp(prop, value) {
   selected.forEach(el => el.setAttribute(prop, value));
   refreshOutput();
   if (typeof snapshot === 'function') snapshot();
+  if (typeof buildPalette === 'function') buildPalette();
 }
 
 colorFill.addEventListener('input', () => {
@@ -742,6 +746,75 @@ function fitToCanvas() {
 }
 
 btnFit.addEventListener('click', fitToCanvas);
+
+// ── Strip clipping — called once on render ──────────────────────
+// Removes overflow:hidden, all clip-path attributes, and <clipPath>/<mask> defs
+// so elements can be freely moved outside the original viewBox boundary.
+function stripClipping() {
+  if (!svgRoot) return;
+
+  // 1. Allow overflow outside the viewBox
+  svgRoot.setAttribute('overflow', 'visible');
+
+  // 2. Remove clip-path attribute from every element (including root)
+  [svgRoot, ...svgRoot.querySelectorAll('[clip-path]')].forEach(el => {
+    el.removeAttribute('clip-path');
+  });
+
+  // 3. Remove inline style clip-path
+  svgRoot.querySelectorAll('*').forEach(el => {
+    if (el.style && el.style.clipPath) el.style.clipPath = '';
+  });
+
+  // 4. Remove <clipPath> and <mask> definition elements entirely
+  svgRoot.querySelectorAll('clipPath, mask').forEach(el => el.remove());
+}
+
+// ── Expand viewBox to fit all content after a move ──────────────
+// Reads the bounding box of every visible element in SVG coordinates
+// and grows the viewBox (never shrinks) to contain them all.
+function expandViewBox() {
+  if (!svgRoot) return;
+
+  // Get the SVG element's own coordinate-system matrix
+  const svgRect = svgRoot.getBoundingClientRect();
+  const vb = svgRoot.viewBox.baseVal;
+  if (!vb || (vb.width === 0 && vb.height === 0)) return;
+
+  // Scale factors: screen px → SVG units
+  const scaleX = vb.width  / svgRect.width;
+  const scaleY = vb.height / svgRect.height;
+
+  let minX = vb.x, minY = vb.y;
+  let maxX = vb.x + vb.width, maxY = vb.y + vb.height;
+
+  svgRoot.querySelectorAll('path,rect,circle,ellipse,line,polyline,polygon,text,use,image').forEach(el => {
+    try {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) return;
+      // Convert screen coords to SVG coords
+      const x1 = (r.left  - svgRect.left)  * scaleX + vb.x;
+      const y1 = (r.top   - svgRect.top)   * scaleY + vb.y;
+      const x2 = (r.right - svgRect.left)  * scaleX + vb.x;
+      const y2 = (r.bottom - svgRect.top)  * scaleY + vb.y;
+      if (x1 < minX) minX = x1;
+      if (y1 < minY) minY = y1;
+      if (x2 > maxX) maxX = x2;
+      if (y2 > maxY) maxY = y2;
+    } catch (_) {}
+  });
+
+  const pad = 0; // no padding — exact fit
+  const newX = minX - pad, newY = minY - pad;
+  const newW = maxX - minX + pad * 2;
+  const newH = maxY - minY + pad * 2;
+
+  svgRoot.setAttribute('viewBox', `${newX} ${newY} ${newW} ${newH}`);
+  svgRoot.setAttribute('width',  newW);
+  svgRoot.setAttribute('height', newH);
+  svgViewport.style.width  = newW + 'px';
+  svgViewport.style.height = newH + 'px';
+}
 
 // ── Wheel zoom toward cursor ────────────────────────────────────
 document.getElementById('canvas-wrap').addEventListener('wheel', e => {

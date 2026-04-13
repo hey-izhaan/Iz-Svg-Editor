@@ -349,6 +349,17 @@
           </div>
         </section>
 
+        <!-- PALETTE -->
+        <section class="panel-section" id="section-palette">
+          <div class="section-header">
+            <span class="section-label">PALETTE</span>
+            <button class="link-btn" id="btn-refresh-palette" title="Rescan colors">Refresh</button>
+          </div>
+          <div id="palette-list">
+            <span class="empty-hint">Render an SVG to see its colors</span>
+          </div>
+        </section>
+
         <!-- hidden sync textarea (used by JS internally) -->
         <textarea id="svg-output-code" hidden spellcheck="false"></textarea>
         <!-- hidden apply/copy buttons still referenced by JS -->
@@ -605,5 +616,6 @@
     <script src="tree.js"></script>
     <script src="history.js"></script>
     <script src="pan.js"></script>
+    <script src="palette.js"></script>
   </body>
 </html>

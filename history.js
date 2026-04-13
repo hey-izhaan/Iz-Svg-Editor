@@ -60,6 +60,7 @@ function restore(xml) {
   updateChips();
   updateAttrPanel();
   refreshOutput();
+  if (typeof buildPalette === 'function') buildPalette();
   syncButtons();
 
   isBusy = false;

@@ -836,3 +836,67 @@ kbd {
 
 .tree-node.el-locked .tree-tag { opacity: 0.55; }
 .svg-locked { pointer-events: none !important; cursor: default !important; }
+
+/* ── Palette Panel ──────────────────────────────────────────── */
+#palette-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 0;
+}
+
+.palette-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 14px;
+  cursor: pointer;
+  border-radius: var(--radius);
+  transition: background 120ms;
+  user-select: none;
+  /* reset <label> defaults */
+  font-weight: normal;
+  margin: 0;
+}
+.palette-row:hover {
+  background: var(--border);
+}
+
+.palette-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid rgba(255,255,255,0.12);
+  flex-shrink: 0;
+}
+
+.palette-hex {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.palette-badge--prop {
+  background: var(--bg-deep);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+.palette-badge--count {
+  background: transparent;
+  color: var(--text-dim);
+}
+
+
+
